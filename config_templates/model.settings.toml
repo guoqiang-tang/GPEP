@@ -81,3 +81,6 @@ overwrite_cv_reg = false
 overwrite_grid_reg = false
 overwrite_ens = false
 overwrite_spcorr = false
+
+# process NaN values in input data
+exclude_in_NaN = true

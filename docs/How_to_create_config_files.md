@@ -419,3 +419,8 @@ If set to `true`, all configurations will be printed at the beginning of model p
 **overwrite_ens**: For ensemble output files  
 **overwrite_spcorr**: For spatial correlation structure files  
 By default, these flags are all `false` to utilize existing outputs to speed up production. Users may change them to `true` to generate brand new files for all or part of GPEP outputs to overwrite existing files. A safer way is to just change `outpath_parent` to create files in a new folder.  
+
+### exclude_in_NaN  
+If set to `ture` (default), for each time step and each point (grid or station), GPEP will exclude nearby stations with NaN values and only keep those valid nearby samples for regression. This will mean increased time cost, although this impact has not been quantified. The time cost should still be notably smaller than spatial regression itself. If set to `true`, it assumes that input station data are already gap filled (i.e., a station either has data for all time steps or does not have any non-NaN data).    
+For example, if there are 35 nearby stations and only 25 of them has valid data for a time step/point, the 25 stations will be used in regression. There is a risk that the regression estimates are not reliable when valid samples are too few. By default, if the valid number is smaller than 5, it will just use IDW estimation.  
+Note, this is only valid for locally weighted regression. For ML regression, the NaN values are excluded by default.  

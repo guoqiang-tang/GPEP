@@ -848,7 +848,7 @@ def ML_regression_grid_multiprocessing(stn_data, stn_predictor, tar_predictor, m
 # parallel version of loop regression: independent processes and large memory use if there are many cpus
 
 def init_worker(stn_data, stn_predictor, tar_nearIndex, tar_nearWeight, tar_predictor, method, probflag, settings,
-                dynamic_predictors, importmodules, maxlimit):
+                dynamic_predictors, importmodules, maxlimit, exclude_in_NaN):
     # Using a dictionary is not strictly necessary. You can also
     # use global variables.
     global mppool_ini_dict
@@ -863,6 +863,7 @@ def init_worker(stn_data, stn_predictor, tar_nearIndex, tar_nearWeight, tar_pred
     mppool_ini_dict['settings']           = settings
     mppool_ini_dict['dynamic_predictors'] = dynamic_predictors
     mppool_ini_dict['maxlimit']           = maxlimit
+    mppool_ini_dict['exclude_in_NaN']     = exclude_in_NaN
 
     for im in importmodules:
         if '.' in im:
@@ -887,6 +888,7 @@ def regression_for_blocks(r1, r2, c1, c2):
     settings           = mppool_ini_dict['settings']
     dynamic_predictors = mppool_ini_dict['dynamic_predictors']
     maxlimit           = mppool_ini_dict['maxlimit']
+    exclude_in_NaN     = mppool_ini_dict['exclude_in_NaN']
 
     nstn, ntime = np.shape(stn_data)
     ydata_tar   = np.nan * np.zeros([r2-r1, c2-c1, ntime])
@@ -905,11 +907,11 @@ def regression_for_blocks(r1, r2, c1, c2):
                 xdata_near0 = stn_predictor[sample_nearIndex, :]
                 xdata_g0 = tar_predictor[r, c, :]
 
-
                 # interpolation for every time step
                 for d in range(ntime):
 
                     ydata_near = np.squeeze(stn_data[sample_nearIndex, d])
+
                     if len(np.unique(ydata_near)) == 1:  # e.g., for prcp, all zero
                         ydata_tar[r-r1, c-c1, d] = ydata_near[0]
                     else:
@@ -948,14 +950,31 @@ def regression_for_blocks(r1, r2, c1, c2):
                                     #         xdata_near = xdata_near_try
                                     #         xdata_g = xdata_g_try
 
+                        # exclude NaN values in input data
+                        sample_weight_d = sample_weight
+                        if exclude_in_NaN == True:
+                            indexnan = np.isnan(ydata_near)
+                            if np.any(indexnan):
+                                ydata_near = ydata_near[~indexnan]
+                                sample_weight_d = sample_weight[~indexnan]
+                                xdata_near = xdata_near[~indexnan, :]
+
                         # regression
-                        if method == 'Linear':
-                            ydata_tar[r-r1, c-c1, d] = weight_linear_regression(xdata_near, sample_weight, ydata_near, xdata_g)
-                        elif method == 'Logistic':
-                            ydata_tar[r-r1, c-c1, d] = weight_logistic_regression(xdata_near, sample_weight, ydata_near, xdata_g)
+                        if len(ydata_near) < 5:
+                            if method == 'Linear':
+                                ydata_tar[r-r1, c-c1, d] = weight_linear_regression(xdata_near, sample_weight_d, ydata_near, xdata_g)
+                            elif method == 'Logistic':
+                                ydata_tar[r-r1, c-c1, d] = weight_logistic_regression(xdata_near, sample_weight_d, ydata_near, xdata_g)
+                            else:
+                                ydata_tar[r-r1, c-c1, d] = train_and_return_test(xdata_near, ydata_near, xdata_g, method, probflag,
+                                                                                 settings, sample_weight_d)
                         else:
-                            ydata_tar[r-r1, c-c1, d] = train_and_return_test(xdata_near, ydata_near, xdata_g, method, probflag,
-                                                                             settings, sample_weight)
+                            if method == 'Linear':
+                                ydata_tar[r - r1, c - c1, d] = np.sum(ydata_near * sample_weight_d) / np.sum(sample_weight_d)
+                            elif method == 'Logistic':
+                                rain_occurrence = (ydata_near > 0.01).astype(float)
+                                ydata_tar[r - r1, c - c1, d] = np.sum(rain_occurrence * sample_weight_d) / np.sum(sample_weight_d)
+
                         # else:
                         #     sys.exit(f'Unknonwn regression method: {method}')
 
@@ -965,7 +984,7 @@ def regression_for_blocks(r1, r2, c1, c2):
     return ydata_tar
 
 def loop_regression_2Dor3D_multiprocessing(stn_data, stn_predictor, tar_nearIndex, tar_nearWeight, tar_predictor, method, probflag,
-                                           settings, dynamic_predictors={}, num_processes=4, importmodules=[], maxlimit={}):
+                                           settings, dynamic_predictors={}, num_processes=4, importmodules=[], maxlimit={}, exclude_in_NaN=True):
     t1 = time.time()
 
     if len(dynamic_predictors) == 0:
@@ -983,7 +1002,7 @@ def loop_regression_2Dor3D_multiprocessing(stn_data, stn_predictor, tar_nearInde
 
     with Pool(processes=num_processes, initializer=init_worker, initargs=(stn_data, stn_predictor, tar_nearIndex, tar_nearWeight,
                                                                           tar_predictor, method, probflag, settings, dynamic_predictors,
-                                                                          importmodules, maxlimit)) as pool:
+                                                                          importmodules, maxlimit, exclude_in_NaN)) as pool:
     #with Pool(processes=num_processes, initializer=init_worker, initargs=(stn_data, stn_predictor, tar_nearIndex, tar_nearWeight,
     #                                                                      tar_predictor, method, probflag, settings,
     #                                                                      dynamic_predictors)) as pool:
@@ -1045,6 +1064,11 @@ def main_regression(config, target):
         predictor_name_static_target = config['predictor_name_static_stn']
     else:
         sys.exit('Unknown target!')
+
+    if 'exclude_in_NaN' in config:
+        exclude_in_NaN = config['exclude_in_NaN']
+    else:
+        exclude_in_NaN = True
 
     # in/out information to this function
 
@@ -1392,7 +1416,7 @@ def main_regression(config, target):
             
             estimates = loop_regression_2Dor3D_multiprocessing(stn_value, stn_predictor, nearIndex, nearWeight, tar_predictor,
                                                                gridcore_continuous[4:], probflag, sklearn_config[gridcore_continuous_short],
-                                                               predictor_dynamic, num_processes, maxlimit=maxlimit)
+                                                               predictor_dynamic, num_processes, maxlimit=maxlimit, exclude_in_NaN=exclude_in_NaN)
         else:
             if var_name in target_vars_max_constrain:
                 print(f'Do not perform max constraint for {var_name} for global regression')
@@ -1466,7 +1490,7 @@ def main_regression(config, target):
                 estimates = loop_regression_2Dor3D_multiprocessing(stn_value, stn_predictor, nearIndex, nearWeight, tar_predictor,
                                                                    gridcore_classification[4:], probflag,
                                                                    sklearn_config[gridcore_continuous_short], predictor_dynamic,
-                                                                   num_processes, importmodules)
+                                                                   num_processes, importmodules, exclude_in_NaN=exclude_in_NaN)
             else:
                 if target == 'cval':
                     estimates = ML_regression_crossvalidation_multiprocessing(stn_value, stn_predictor, gridcore_classification, probflag,
